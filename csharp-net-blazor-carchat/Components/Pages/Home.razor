@@ -1,0 +1,1383 @@
+﻿@page "/"
+@using System.Text.Json
+@using System.Text.Json.Serialization
+@using csharp_net_blazor_carchat.Models
+@using csharp_net_blazor_carchat.Services
+@using Markdig
+@inject HttpClient Http
+@inject IJSRuntime JSRuntime
+@inject IHttpClientFactory HttpClientFactory
+@inject ILogger<Home> Logger
+@inject CarCompareService CompareService
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>CarChatAI</PageTitle>
+
+<div class="container mt-4">
+    @if (!articles.Any())
+    {
+        <div class="text-center mb-4">
+            <h4 class="mb-3">Assistant IA pour la recherche automobile sur LeBonCoin</h4>
+            <div class="text-muted mb-4" style="max-width: 600px; margin: 0 auto;">
+                <p>Je peux vous aider à explorer les annonces de voitures sur LeBonCoin :</p>
+                <ul class="list-unstyled">
+                    <li><i class="bi bi-search me-2"></i>Rechercher des voitures selon vos critères</li>
+                    <li><i class="bi bi-funnel me-2"></i>Filtrer les résultats avec des critères spécifiques</li>
+                    <li><i class="bi bi-compare me-2"></i>Comparer plusieurs véhicules</li>
+                </ul>
+                <p class="small mt-2">
+                    Exemples : "Trouve-moi des SUV diesel à moins de 20000€" ou 
+                    "Recherche des voitures électriques récentes dans les annonces"
+                </p>
+                <p class="small text-muted mt-3">
+                    <i class="bi bi-info-circle me-1"></i>
+                    Toutes les annonces sont issues de LeBonCoin.fr
+                </p>
+            </div>
+        </div>
+    }
+
+    @if (selectedArticles.Any())
+    {
+        <div class="alert alert-info mb-3">
+            <i class="bi bi-info-circle me-2"></i>
+            @selectedArticles.Count voiture@(selectedArticles.Count > 1 ? "s" : "") sélectionnée@(selectedArticles.Count > 1 ? "s" : "") pour comparaison
+            <button type="button" class="btn btn-link text-info p-0 ms-2" @onclick="ClearSelection">
+                Effacer la sélection
+            </button>
+            <small class="d-block mt-1 text-muted">
+                <i class="bi bi-exclamation-triangle-fill me-1"></i>
+                Mode comparaison actif
+            </small>
+        </div>
+    }
+
+    @if (isComparingCars)
+    {
+        <div class="pulsating-container mb-3">
+            <div class="pulsating-box">
+                <div class="d-flex align-items-center">
+                    <div class="spinner-border text-primary me-2" role="status">
+                        <span class="visually-hidden">Génération de la réponse...</span>
+                    </div>
+                    <span class="fw-bold">L'IA analyse votre question...</span>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (isFiltering)
+    {
+        <div class="pulsating-container mb-3">
+            <div class="pulsating-box">
+                <div class="d-flex align-items-center">
+                    <div class="spinner-border text-primary me-2" role="status">
+                        <span class="visually-hidden">Filtrage en cours...</span>
+                    </div>
+                    <span class="fw-bold">L'IA filtre les résultats...</span>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (!string.IsNullOrEmpty(comparisonResult))
+    {
+        <div class="card mb-4" id="comparison-result">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Résultat de la comparaison</h5>
+                <button type="button" class="btn-close" @onclick="@(() => comparisonResult = string.Empty)" aria-label="Close"></button>
+            </div>
+            <div class="card-body">
+                <div class="comparison-content markdown-body">
+                    @((MarkupString)ConvertMarkdownToHtml(comparisonResult))
+                </div>
+            </div>
+        </div>
+    }
+
+    <form @onsubmit="HandleSubmit" @onsubmit:preventDefault>
+        <div class="row mb-4">
+            <div class="col">
+                <div class="d-flex gap-3 align-items-center">
+                    @if (articles.Any())
+                    {
+                        <div class="ai-filter-check form-check">
+                            <input class="form-check-input" 
+                                   type="checkbox" 
+                                   id="mainAiFilter"
+                                   @bind="isAiFilterEnabled"
+                                   disabled="@(selectedArticles.Any())"
+                                   title="@(selectedArticles.Any() ? "Désélectionnez les voitures pour activer le filtre IA" : "Activer le filtre IA")">
+                            <label class="form-check-label @(selectedArticles.Any() ? "text-muted" : "")" for="mainAiFilter">
+                                Filtre IA
+                            </label>
+                        </div>
+                    }
+                    <div class="input-group @(isLoading || isComparingCars || isFiltering ? "loading" : "")">
+                        <input type="text" 
+                               class="form-control @(isLoading || isComparingCars || isFiltering ? "bg-light" : "")" 
+                               @bind="prompt" 
+                               @bind:event="oninput"
+                               placeholder="@(selectedArticles.Any() 
+                                   ? "Posez une question sur les voitures sélectionnées..." 
+                                   : isAiFilterEnabled 
+                                       ? (isFilterMode && filteredCarIds.Any() 
+                                           ? "Affinez votre recherche sur les résultats filtrés..." 
+                                           : (HasManualFilters() 
+                                               ? "Filtrez par IA les résultats déjà filtrés..." 
+                                               : "Décrivez les voitures que vous recherchez...")) 
+                                       : "Recherchez des voitures...")"
+                               disabled="@(isLoading || isComparingCars || isFiltering)" />
+                        <button type="submit" 
+                                class="btn btn-primary d-flex align-items-center justify-content-center"
+                                style="min-width: 44px;"
+                                disabled="@(isLoading || isComparingCars || isFiltering)">
+                            @if (isLoading)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                                <span>Envoi...</span>
+                            }
+                            else if (isComparingCars)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                                <span>Comparaison...</span>
+                            }
+                            else if (isFiltering)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                                <span>Filtrage...</span>
+                            }
+                            else
+                            {
+                                <i class="bi bi-arrow-right"></i>
+                            }
+                        </button>
+                    </div>
+                </div>
+                @if (!string.IsNullOrEmpty(filterExplanation))
+                {
+                    <div class="alert alert-info mt-3 filter-result-alert">
+                        <i class="bi bi-info-circle me-2"></i>
+                        @filterExplanation
+                        <button type="button" class="btn-close float-end" 
+                                @onclick="@(() => filterExplanation = string.Empty)" 
+                                aria-label="Close"></button>
+                    </div>
+                }
+            </div>
+        </div>
+    </form>
+
+    @if (articles != null && articles.Any())
+    {
+        <div class="card mb-4">
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-3">
+                        <label class="form-label">Fourchette de prix</label>
+                        <div class="input-group">
+                            <input type="number" class="form-control" placeholder="Min" @bind="minPrice">
+                            <input type="number" class="form-control" placeholder="Max" @bind="maxPrice">
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Année</label>
+                        <div class="input-group">
+                            <input type="number" class="form-control" placeholder="Min" @bind="minYear">
+                            <input type="number" class="form-control" placeholder="Max" @bind="maxYear">
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Kilométrage (km)</label>
+                        <div class="input-group">
+                            <input type="number" class="form-control" placeholder="Max" @bind="maxMileage">
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Type de carburant</label>
+                        <select class="form-select" @bind="selectedFuelType">
+                            <option value="">Tous</option>
+                            @foreach (var fuelType in GetUniqueFuelTypes())
+                            {
+                                <option value="@fuelType">@fuelType</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <div>
+                <span class="text-muted" id="filtered-results">
+                    Affichage de @FilteredArticles.Count() sur @articles.Count voitures
+                    @if (isFilterMode && filteredCarIds.Any())
+                    {
+                        <span class="badge bg-info ms-2">Filtre IA actif</span>
+                        @if (filterStepCount > 1)
+                        {
+                            <span class="badge bg-secondary ms-2">Filtrage en cascade (Étape @filterStepCount)</span>
+                        }
+                    }
+                    @if (minPrice.HasValue || maxPrice.HasValue || minYear.HasValue || maxYear.HasValue || 
+                         maxMileage.HasValue || !string.IsNullOrEmpty(selectedFuelType))
+                    {
+                        <span class="badge bg-primary ms-2">Filtres manuels actifs</span>
+                    }
+                </span>
+            </div>
+            <div>
+                <button class="btn btn-outline-secondary" @onclick="ClearFilters">
+                    Effacer les filtres
+                </button>
+            </div>
+        </div>
+
+        <div class="row row-cols-1 row-cols-md-3 g-4">
+            @foreach (var article in FilteredArticles)
+            {
+                <div class="col">
+                    <div class="card h-100 shadow-sm">
+                        <div class="image-container position-relative">
+                            @if (article.Images != null && article.Images.Any())
+                            {
+                                @if (article.Images.Count > 1)
+                                {
+                                    <div class="form-check position-absolute" @onclick="@(() => HandleCheckboxClick(article))">
+                                        <input class="form-check-input" type="checkbox" 
+                                               checked="@article.IsSelected"
+                                               @onclick:stopPropagation 
+                                               @onchange="@(e => HandleCheckboxChange(article, e))"
+                                               id="@($"check_{article.Id}")">
+                                        <label class="form-check-label" for="@($"check_{article.Id}")">
+                                            Sélectionner pour comparer
+                                        </label>
+                                    </div>
+                                    <div id="carousel-@article.Id" class="carousel slide" data-bs-ride="carousel">
+                                        <div class="carousel-inner">
+                                            @for (int i = 0; i < article.Images.Count; i++)
+                                            {
+                                                <div class="carousel-item @(i == 0 ? "active" : "")">
+                                                    <img src="@article.Images[i]" 
+                                                         class="card-img-top d-block w-100" 
+                                                         alt="@article.Title"
+                                                         style="height: 200px; object-fit: cover;">
+                                                </div>
+                                            }
+                                        </div>
+                                        <button class="carousel-control-prev" type="button" 
+                                                data-bs-target="#carousel-@article.Id" 
+                                                data-bs-slide="prev">
+                                            <span class="carousel-control-prev-icon" aria-hidden="true"></span>
+                                            <span class="visually-hidden">Previous</span>
+                                        </button>
+                                        <button class="carousel-control-next" type="button" 
+                                                data-bs-target="#carousel-@article.Id" 
+                                                data-bs-slide="next">
+                                            <span class="carousel-control-next-icon" aria-hidden="true"></span>
+                                            <span class="visually-hidden">Next</span>
+                                        </button>
+                                        <div class="carousel-indicators">
+                                            @for (int i = 0; i < article.Images.Count; i++)
+                                            {
+                                                <button type="button" 
+                                                        data-bs-target="#carousel-@article.Id" 
+                                                        data-bs-slide-to="@i" 
+                                                        class="@(i == 0 ? "active" : "")"
+                                                        aria-current="@(i == 0 ? "true" : "false")" 
+                                                        aria-label="Slide @(i + 1)">
+                                                </button>
+                                            }
+                                        </div>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="form-check position-absolute" @onclick="@(() => HandleCheckboxClick(article))">
+                                        <input class="form-check-input" type="checkbox" 
+                                               checked="@article.IsSelected"
+                                               @onclick:stopPropagation 
+                                               @onchange="@(e => HandleCheckboxChange(article, e))"
+                                               id="@($"check_{article.Id}")">
+                                        <label class="form-check-label" for="@($"check_{article.Id}")">
+                                            Sélectionner pour comparer
+                                        </label>
+                                    </div>
+                                    <img src="@article.Images[0]" 
+                                         class="card-img-top" 
+                                         alt="@article.Title"
+                                         style="height: 200px; object-fit: cover;">
+                                }
+                            }
+                        </div>
+                        <div class="card-body">
+                            <h5 class="card-title text-truncate" title="@article.Title">@article.Title</h5>
+                            <p class="card-text">
+                                <strong class="text-primary">@article.Price</strong><br />
+                                <small class="text-muted">@article.Location</small>
+                            </p>
+                            <div class="card-text">
+                                @if (!article.Attributes.Any())
+                                {
+                                    <div class="text-muted">No attributes found</div>
+                                }
+                                @foreach (var attr in article.Attributes)
+                                {
+                                    <div class="mb-1">
+                                        <small>
+                                            <strong>@attr.Key:</strong> @attr.Value
+                                        </small>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                        <div class="card-footer bg-transparent">
+                            <a href="@article.Url" 
+                               target="_blank" 
+                               class="btn btn-primary w-100">
+                                Voir l'offre
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+
+    @if (isLoading)  @* Only show during search, not comparison *@
+    {
+        <div class="text-center mb-4">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <div class="mt-2 text-primary">Recherche de voitures en cours...</div>
+        </div>
+    }
+
+    @if (!string.IsNullOrEmpty(error))
+    {
+        <Alert Type="danger" Message="@error" />
+    }
+</div>
+
+<style>
+    .input-group input:disabled {
+        cursor: not-allowed;
+        opacity: 0.7;
+    }
+
+    .card {
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1) !important;
+    }
+
+    .carousel-item img {
+        transition: transform 0.3s ease;
+    }
+
+    .card:hover .carousel-item img {
+        transform: scale(1.05);
+    }
+
+    .card {
+        overflow: hidden;
+    }
+
+    .text-truncate {
+        max-width: 100%;
+        display: block;
+    }
+
+    .carousel-control-prev,
+    .carousel-control-next {
+        width: 10%;
+        background: rgba(0,0,0,0.2);
+    }
+
+    .carousel-indicators {
+        margin-bottom: 0.5rem;
+    }
+
+    .carousel-indicators button {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin: 0 4px;
+    }
+
+    .form-label {
+        font-size: 0.875rem;
+        font-weight: 500;
+    }
+
+    .input-group .form-control:first-child {
+        border-top-right-radius: 0;
+        border-bottom-right-radius: 0;
+    }
+
+    .input-group .form-control:last-child {
+        border-top-left-radius: 0;
+        border-bottom-left-radius: 0;
+    }
+
+    .comparison-content {
+        white-space: normal;
+        font-size: 1rem;
+        line-height: 1.5;
+    }
+
+    .card-header .btn-close {
+        padding: 0.5rem;
+    }
+
+    .markdown-body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        font-size: 16px;
+        line-height: 1.5;
+        word-wrap: break-word;
+    }
+
+    .markdown-body h1,
+    .markdown-body h2,
+    .markdown-body h3,
+    .markdown-body h4,
+    .markdown-body h5,
+    .markdown-body h6 {
+        margin-top: 16px;
+        margin-bottom: 8px;
+        font-weight: 600;
+        line-height: 1.25;
+    }
+
+    .markdown-body p {
+        margin-top: 0;
+        margin-bottom: 8px;
+    }
+
+    .markdown-body strong {
+        font-weight: 600;
+    }
+
+    .markdown-body ul,
+    .markdown-body ol {
+        padding-left: 1.5em;
+        margin-top: 0;
+        margin-bottom: 8px;
+    }
+
+    .markdown-body li {
+        margin-bottom: 4px;
+    }
+
+    .markdown-body li:last-child {
+        margin-bottom: 0;
+    }
+
+    .markdown-body code {
+        padding: 0.2em 0.4em;
+        margin: 0;
+        font-size: 85%;
+        background-color: rgba(27,31,35,0.05);
+        border-radius: 6px;
+    }
+
+    .pulsating-container {
+        margin: 1rem 0;
+        border-radius: 8px;
+        background: linear-gradient(45deg, #f0f8ff, #ffffff);
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+    }
+
+    .pulsating-box {
+        background-color: white;
+        border-radius: 6px;
+        padding: 1rem;
+        border-left: 4px solid #0d6efd;
+        animation: pulsate 2s infinite;
+    }
+
+    .pulsating-box .spinner-border {
+        width: 1.5rem;
+        height: 1.5rem;
+        border-width: 0.2em;
+    }
+
+    .pulsating-box span {
+        font-size: 1.1rem;
+        color: #0d6efd;
+    }
+
+    @@keyframes pulsate {
+        0% {
+            box-shadow: 0 0 0 0 rgba(13, 110, 253, 0.4);
+        }
+        70% {
+            box-shadow: 0 0 0 10px rgba(13, 110, 253, 0);
+        }
+        100% {
+            box-shadow: 0 0 0 0 rgba(13, 110, 253, 0);
+        }
+    }
+
+    .input-group {
+        transition: opacity 0.3s ease;
+    }
+
+    .input-group.loading {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+
+    .image-container {
+        position: relative;
+    }
+
+    .image-container .form-check {
+        top: 10px;
+        left: 10px;
+        z-index: 1;
+        background-color: rgba(255, 255, 255, 0.95);
+        padding: 8px 12px;
+        border-radius: 4px;
+        margin: 0;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+        user-select: none;
+        transition: background-color 0.2s;
+        flex-direction: row;  /* Ensure items are in a row */
+    }
+
+    .image-container .form-check-input {
+        margin: 0;
+        flex-shrink: 0;
+        order: 1;  /* Put checkbox first */
+        width: 1.2em;
+        height: 1.2em;
+        cursor: pointer;
+    }
+
+    .image-container .form-check-label {
+        margin: 0;
+        order: 2;  /* Put label second */
+        font-size: 0.85rem;
+        white-space: nowrap;
+        color: #495057;
+        font-weight: 500;
+        cursor: pointer;
+    }
+
+    .carousel-control-prev,
+    .carousel-control-next {
+        z-index: 2;
+    }
+
+    .btn i.bi {
+        font-size: 1.2rem;
+        line-height: 1;
+        font-weight: bold;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+    }
+
+    .btn-primary i.bi-arrow-right {
+        font-size: 1.4rem;
+        padding: 0.2rem;
+    }
+
+    .list-unstyled li {
+        margin: 0.5rem 0;
+        color: #666;
+    }
+
+    .bi {
+        font-size: 1.1rem;
+        vertical-align: -0.125em;
+    }
+
+    .ai-filter-check {
+        background-color: #f8f9fa;
+        padding: 8px 16px;
+        border-radius: 8px;
+        border: 1px solid #dee2e6;
+        min-width: 140px;
+        transition: all 0.2s ease;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .ai-filter-check .form-check-input {
+        margin: 0;
+        flex-shrink: 0;
+    }
+
+    .ai-filter-check .form-check-label {
+        display: flex;
+        align-items: center;
+        color: #495057;
+        font-weight: 500;
+        margin: 0;
+        gap: 6px;
+        white-space: nowrap;
+    }
+
+    .ai-filter-check .bi-stars {
+        color: #ffd700;
+        font-size: 1.1rem;
+        flex-shrink: 0;
+    }
+
+    .ai-filter-check:hover {
+        background-color: #e9ecef;
+        border-color: #ced4da;
+    }
+
+    .ai-filter-check .form-check-input:checked ~ .form-check-label {
+        color: #0d6efd;
+    }
+
+    .ai-filter-check .form-check-input:checked ~ .form-check-label .bi-stars {
+        color: #0d6efd;
+    }
+
+    .filter-result-alert {
+        animation: fadeInUp 0.5s ease-out;
+        border-left: 4px solid #0d6efd;
+    }
+
+    @@keyframes fadeInUp {
+        from {
+            opacity: 0;
+            transform: translateY(10px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    /* Add media query for mobile devices */
+    @@media (max-width: 768px) {
+        .ai-filter-check {
+            min-width: auto;
+            padding: 6px 12px;
+            font-size: 0.9rem;
+        }
+
+        .ai-filter-check .bi-stars {
+            font-size: 1rem;
+        }
+
+        .ai-filter-check .form-check-label {
+            font-size: 0.9rem;
+        }
+
+        /* Add more space between filter and search box on mobile */
+        .d-flex.gap-3 {
+            gap: 0.5rem !important;
+        }
+
+        .image-container .form-check {
+            padding: 6px 10px;
+        }
+
+        .image-container .form-check-label {
+            font-size: 0.8rem;
+        }
+    }
+
+    /* Add even smaller size for very small screens */
+    @@media (max-width: 375px) {
+        .ai-filter-check {
+            padding: 4px 8px;
+        }
+
+        .ai-filter-check .form-check-label {
+            font-size: 0.85rem;
+        }
+    }
+</style>
+
+@code {
+    private string prompt = string.Empty;
+    private List<Article> articles = new();
+    private bool isLoading;
+    private string error = string.Empty;
+
+    // Filter properties
+    private decimal? minPrice;
+    private decimal? maxPrice;
+    private int? minYear;
+    private int? maxYear;
+    private int? maxMileage;
+    private string selectedFuelType = "";
+
+    private bool isFilterMode;
+    private string filterQuery = string.Empty;
+    private bool isFiltering;
+    private string filterExplanation = string.Empty;
+    private HashSet<int> filteredCarIds = new();
+    private int filterStepCount = 0;
+
+    private bool _isAiFilterEnabled;
+    private bool isAiFilterEnabled
+    {
+        get => _isAiFilterEnabled;
+        set
+        {
+            if (value && selectedArticles.Any())
+            {
+                // Show toast notification
+                JSRuntime.InvokeVoidAsync("showToast", "Sélection active", "Désélectionnez les voitures pour activer le filtre IA.", "warning");
+                return;
+            }
+            
+            _isAiFilterEnabled = value;
+            
+            // If AI filtering is enabled, clear any selected cars
+            if (_isAiFilterEnabled && selectedArticles.Any())
+            {
+                ClearSelection();
+            }
+        }
+    }
+
+    private IEnumerable<Article> FilteredArticles => articles?.Where(article =>
+    {
+        if (article == null) return false;
+
+        // Apply AI filter if active
+        if (isFilterMode && filteredCarIds.Any())
+        {
+            var isIncluded = filteredCarIds.Contains(article.Id);
+            Logger.LogDebug("AI Filter: Car ID {Id} is {Status}", 
+                article.Id, 
+                isIncluded ? "included" : "excluded");
+            if (!isIncluded) return false;
+        }
+
+        // Parse price
+        var price = ParsePrice(article.Price);
+        if (minPrice.HasValue && price < minPrice.Value) return false;
+        if (maxPrice.HasValue && price > maxPrice.Value) return false;
+
+        // Parse year
+        if (article.Attributes.TryGetValue("Année", out var yearStr))
+        {
+            if (int.TryParse(yearStr, out var year))
+            {
+                if (minYear.HasValue && year < minYear.Value) return false;
+                if (maxYear.HasValue && year > maxYear.Value) return false;
+            }
+        }
+
+        // Parse mileage
+        if (article.Attributes.TryGetValue("Kilométrage", out var mileageStr))
+        {
+            var mileage = ParseMileage(mileageStr);
+            if (maxMileage.HasValue && mileage > maxMileage.Value) return false;
+        }
+
+        // Check fuel type
+        if (!string.IsNullOrEmpty(selectedFuelType) && 
+            article.Attributes.TryGetValue("Carburant", out var fuel) &&
+            fuel != selectedFuelType) return false;
+
+        return true;
+    }) ?? Enumerable.Empty<Article>();
+
+    private decimal ParsePrice(string priceStr)
+    {
+        if (string.IsNullOrEmpty(priceStr)) return 0;
+        
+        // Remove currency symbol, spaces, and non-numeric characters
+        var numericStr = new string(priceStr.Where(c => char.IsDigit(c)).ToArray());
+        return decimal.TryParse(numericStr, out var price) ? price : 0;
+    }
+
+    private int ParseMileage(string mileageStr)
+    {
+        if (string.IsNullOrEmpty(mileageStr)) return 0;
+        
+        // Extract numeric value from strings like "138000 km"
+        var numericStr = new string(mileageStr.Where(c => char.IsDigit(c)).ToArray());
+        return int.TryParse(numericStr, out var mileage) ? mileage : 0;
+    }
+
+    private IEnumerable<string> GetUniqueFuelTypes()
+    {
+        return articles?
+            .Where(a => a.Attributes.ContainsKey("Carburant"))
+            .Select(a => a.Attributes["Carburant"])
+            .Distinct()
+            .OrderBy(f => f) ?? Enumerable.Empty<string>();
+    }
+
+    private void ClearFilters()
+    {
+        minPrice = null;
+        maxPrice = null;
+        minYear = null;
+        maxYear = null;
+        maxMileage = null;
+        selectedFuelType = "";
+        
+        // Clear AI filter
+        isFilterMode = false;
+        filterQuery = string.Empty;
+        filteredCarIds.Clear();
+        filterExplanation = string.Empty;
+        isAiFilterEnabled = false;
+        filterStepCount = 0;
+    }
+
+    protected override void OnInitialized()
+    {
+        Logger.LogInformation("Chat component initialized");
+    }
+
+    private async Task HandleSubmit()
+    {
+        if (string.IsNullOrWhiteSpace(prompt))
+            return;
+
+        // Car comparison logic is triggered when cars are selected
+        if (selectedArticles.Any())
+        {
+            error = string.Empty; // Clear any previous errors
+            comparisonResult = string.Empty; // Clear previous result
+            
+            try 
+            {
+                isComparingCars = true;
+                await InvokeAsync(StateHasChanged); // Force UI update
+                await Task.Delay(50); // Small delay to ensure UI updates
+
+                var request = new CompareRequest
+                {
+                    Cars = selectedArticles,
+                    Question = prompt
+                };
+
+                Logger.LogInformation("Sending comparison request with {Count} cars and question: {Question}", 
+                    selectedArticles.Count, prompt);
+                    
+                var fullResponse = await CompareService.CompareAsync(request);
+                
+                if (string.IsNullOrWhiteSpace(fullResponse))
+                {
+                    error = "No comparison result received";
+                    return;
+                }
+
+                try
+                {
+                    var responseObj = JsonSerializer.Deserialize<ComparisonResponse>(fullResponse);
+                    comparisonResult = responseObj?.Analysis ?? "No analysis available";
+                    
+                    // Scroll to result after a short delay to ensure UI has updated
+                    await Task.Delay(100);
+                    await JS.InvokeVoidAsync("scrollToElement", "comparison-result");
+                }
+                catch (JsonException ex)
+                {
+                    error = "Failed to parse comparison result";
+                    Logger.LogError(ex, "JSON parsing error in comparison result");
+                    return;
+                }
+                
+                prompt = string.Empty;
+            }
+            catch (Exception ex)
+            {
+                error = $"Error comparing cars: {ex.Message}";
+                Logger.LogError(ex, "Error during car comparison");
+            }
+            finally 
+            {
+                isComparingCars = false;
+                await InvokeAsync(StateHasChanged); // Force UI update
+            }
+        }
+        else if (isAiFilterEnabled && articles.Any())
+        {
+            // Use the prompt as an AI filter query
+            filterQuery = prompt;
+            await ApplyAIFilter();
+            prompt = string.Empty;
+        }
+        else
+        {
+            Logger.LogInformation("Form submitted with search prompt: {Prompt}", prompt);
+            await SendMessage();
+        }
+    }
+
+    private async Task SendMessage()
+    {
+        if (isLoading || string.IsNullOrWhiteSpace(prompt))
+        {
+            Logger.LogWarning("Cannot send message: {Reason}", 
+                isLoading ? "Already processing" : "Empty prompt");
+            return;
+        }
+
+        isLoading = true;
+        await InvokeAsync(StateHasChanged); // Force UI update
+        await Task.Delay(50); // Small delay to ensure UI updates
+        
+        string responseContent = string.Empty; // Declare responseContent at method level
+        
+        // Save current selections before clearing the list
+        var selectedStates = articles.Where(a => a.IsSelected)
+            .ToDictionary(a => a.Id, a => a.IsSelected);
+        
+        articles = new();
+        error = string.Empty;
+        await InvokeAsync(StateHasChanged); // Force UI update
+
+        try
+        {
+            Logger.LogInformation("Starting API request");
+            var client = HttpClientFactory.CreateClient("ChatAPI");
+            var request = new { prompt = prompt };
+
+            var jsonOptions = new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true,
+                AllowTrailingCommas = true
+            };
+
+            using var response = await client.PostAsJsonAsync("Chat", request);
+            responseContent = await response.Content.ReadAsStringAsync();
+            
+            Logger.LogInformation("Received API response: {StatusCode}", response.StatusCode);
+            Logger.LogDebug("Raw response content: {Content}", responseContent);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                error = $"Server error: {response.StatusCode}";
+                Logger.LogError("API request failed: {StatusCode}", response.StatusCode);
+                return;
+            }
+
+            var chatResponse = JsonSerializer.Deserialize<ChatResponse>(responseContent, jsonOptions);
+            Logger.LogInformation("Chat response deserialized: Success={Success}, HasError={HasError}", 
+                chatResponse?.Success, !string.IsNullOrEmpty(chatResponse?.Error));
+            
+            if (chatResponse?.Success != true)
+            {
+                error = chatResponse?.Error ?? "Unknown error occurred";
+                Logger.LogError("Chat API indicated failure: {Error}", chatResponse?.Error);
+                return;
+            }
+
+            Logger.LogDebug("Response string to deserialize: {Response}", chatResponse.Response);
+
+            // First deserialize the outer response
+            var searchResponse = JsonSerializer.Deserialize<SearchResponse>(chatResponse.Response, jsonOptions);
+            Logger.LogInformation("Search response deserialized: HasUrl={HasUrl}, ArticlesCount={Count}", 
+                !string.IsNullOrEmpty(searchResponse?.SearchUrl),
+                searchResponse?.Articles?.Count ?? 0);
+            
+            if (searchResponse?.Articles == null)
+            {
+                error = "Articles collection is null";
+                Logger.LogWarning("Articles collection is null in search response");
+                return;
+            }
+
+            if (!searchResponse.Articles.Any())
+            {
+                error = "No articles found in response";
+                Logger.LogWarning("Articles collection is empty in search response");
+                return;
+            }
+
+            articles = searchResponse.Articles;
+            Logger.LogInformation("Successfully loaded {Count} articles", articles.Count);
+            
+            // Restore previous selections using article IDs
+            foreach (var article in articles)
+            {
+                if (selectedStates.TryGetValue(article.Id, out bool wasSelected))
+                {
+                    article.IsSelected = wasSelected;
+                }
+            }
+
+            prompt = ""; // Clear input after successful request
+        }
+        catch (JsonException ex)
+        {
+            error = "Failed to parse response data";
+            Logger.LogError(ex, "JSON deserialization error: {Message}", ex.Message);
+            Logger.LogError(ex, "Response content: {Content}", responseContent);
+        }
+        catch (Exception ex)
+        {
+            error = "Failed to process request";
+            Logger.LogError(ex, "Error processing request: {Message}", ex.Message);
+        }
+        finally
+        {
+            isLoading = false;
+            await InvokeAsync(StateHasChanged); // Force UI update
+        }
+    }
+
+    private string comparisonResult = string.Empty;
+
+    private List<Article> selectedArticles => FilteredArticles?
+        .Where(a => a.IsSelected)
+        .ToList() ?? new();
+
+    // Add new loading state specific to comparison
+    private bool isComparingCars;
+
+    private void ClearSelection()
+    {
+        foreach (var article in articles)
+        {
+            article.IsSelected = false;
+        }
+        
+        // Note: We don't automatically enable AI filtering here
+        // to avoid unexpected behavior, but we could if desired
+        
+        StateHasChanged();
+    }
+
+    private class ComparisonResponse
+    {
+        [JsonPropertyName("analysis")]
+        public string Analysis { get; set; } = string.Empty;
+    }
+
+    private string ConvertMarkdownToHtml(string markdown)
+    {
+        try
+        {
+            // Preprocess to remove emoji characters
+            markdown = RemoveEmojis(markdown);
+            
+            var pipeline = new MarkdownPipelineBuilder()
+                .UseAdvancedExtensions()
+                // Remove the emoji extension to prevent emoji processing
+                //.UseEmojiAndSmiley()
+                .Build();
+            
+            return Markdig.Markdown.ToHtml(markdown, pipeline);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error converting markdown to HTML");
+            return markdown; // Return raw text if conversion fails
+        }
+    }
+    
+    private string RemoveEmojis(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return text;
+            
+        // Remove emoji shortcodes like :smile: :thumbsup: etc.
+        text = System.Text.RegularExpressions.Regex.Replace(text, @":[a-z_+-]+:", string.Empty);
+        
+        // Remove Unicode emoji characters
+        var result = new System.Text.StringBuilder(text.Length);
+        for (int i = 0; i < text.Length; i++)
+        {
+            // Skip variation selectors (VS15, VS16) and zero-width joiners often used with emojis
+            if ((text[i] >= 0xFE00 && text[i] <= 0xFE0F) || text[i] == 0x200D)
+            {
+                continue;
+            }
+            
+            // Check for surrogate pairs (many emojis use these)
+            if (i < text.Length - 1 && char.IsSurrogatePair(text[i], text[i + 1]))
+            {
+                // Skip both characters in the surrogate pair
+                i++;
+                continue;
+            }
+            
+            // Check for single character emojis
+            if (!IsEmoji(text[i]))
+            {
+                result.Append(text[i]);
+            }
+        }
+        
+        return result.ToString();
+    }
+    
+    private bool IsEmoji(char c)
+    {
+        // Check if character is in emoji Unicode ranges
+        return (c >= 0x1F600 && c <= 0x1F64F) || // Emoticons
+               (c >= 0x1F300 && c <= 0x1F5FF) || // Misc Symbols and Pictographs
+               (c >= 0x1F680 && c <= 0x1F6FF) || // Transport and Map
+               (c >= 0x1F700 && c <= 0x1F77F) || // Alchemical Symbols
+               (c >= 0x1F780 && c <= 0x1F7FF) || // Geometric Shapes
+               (c >= 0x1F800 && c <= 0x1F8FF) || // Supplemental Arrows-C
+               (c >= 0x1F900 && c <= 0x1F9FF) || // Supplemental Symbols and Pictographs
+               (c >= 0x1FA00 && c <= 0x1FAFF) || // Chess Symbols
+               (c >= 0x2600 && c <= 0x26FF) ||   // Misc Symbols
+               (c >= 0x2700 && c <= 0x27BF);     // Dingbats
+    }
+
+    private void HandleCheckboxClick(Article article)
+    {
+        if (isAiFilterEnabled)
+        {
+            // Show toast notification
+            JSRuntime.InvokeVoidAsync("showToast", "Filtre IA actif", "Désactivez le filtre IA pour sélectionner des voitures.", "warning");
+            return;
+        }
+
+        article.IsSelected = !article.IsSelected;
+        
+        // If a car is selected and AI filtering is enabled, disable AI filtering
+        if (article.IsSelected && isAiFilterEnabled)
+        {
+            isAiFilterEnabled = false;
+        }
+        
+        StateHasChanged();
+    }
+
+    private void HandleCheckboxChange(Article article, ChangeEventArgs e)
+    {
+        if (isAiFilterEnabled)
+        {
+            // Show toast notification
+            JSRuntime.InvokeVoidAsync("showToast", "Filtre IA actif", "Désactivez le filtre IA pour sélectionner des voitures.", "warning");
+            return;
+        }
+
+        if (e.Value is bool isChecked)
+        {
+            article.IsSelected = isChecked;
+            
+            // If a car is selected and AI filtering is enabled, disable AI filtering
+            if (article.IsSelected && isAiFilterEnabled)
+            {
+                isAiFilterEnabled = false;
+            }
+            
+            StateHasChanged();
+        }
+    }
+
+    private class SearchResponse
+    {
+        [JsonPropertyName("searchUrl")]
+        public string SearchUrl { get; set; } = string.Empty;
+
+        [JsonPropertyName("Articles")]
+        public List<Article> Articles { get; set; } = new();
+    }
+
+    private class ChatResponse
+    {
+        [JsonPropertyName("response")]
+        public string Response { get; set; } = string.Empty;
+
+        [JsonPropertyName("success")]
+        public bool Success { get; set; }
+
+        [JsonPropertyName("error")]
+        public string? Error { get; set; }
+    }
+
+    private async Task ApplyAIFilter()
+    {
+        if (string.IsNullOrWhiteSpace(filterQuery) || isFiltering)
+            return;
+
+        isFiltering = true;
+        filterExplanation = string.Empty;
+        error = string.Empty;
+        await InvokeAsync(StateHasChanged); // Force UI update
+        await Task.Delay(50); // Small delay to ensure UI updates
+
+        try
+        {
+            Logger.LogInformation("Starting AI filter with query: {Query}", filterQuery);
+            
+            // Use the currently filtered results (including both AI and manual filters)
+            List<Article> carsToFilter;
+            if (isFilterMode || minPrice.HasValue || maxPrice.HasValue || minYear.HasValue || 
+                maxYear.HasValue || maxMileage.HasValue || !string.IsNullOrEmpty(selectedFuelType))
+            {
+                // Use FilteredArticles which already applies all active filters
+                carsToFilter = FilteredArticles.ToList();
+                Logger.LogInformation("Using already filtered cars as input: {Count} cars", carsToFilter.Count);
+                
+                // Increment filter step counter when filtering already filtered results
+                if (isFilterMode)
+                {
+                    filterStepCount++;
+                }
+                else
+                {
+                    // First AI filter after manual filters
+                    filterStepCount = 1;
+                }
+            }
+            else
+            {
+                carsToFilter = articles.ToList();
+                Logger.LogInformation("Using all cars as input: {Count} cars", carsToFilter.Count);
+                // Reset filter step counter when starting a new filter
+                filterStepCount = 1;
+            }
+
+            var request = new FilterRequest
+            {
+                Cars = carsToFilter,
+                FilterQuery = filterQuery
+            };
+
+            // Log the full request body
+            var requestJson = JsonSerializer.Serialize(request, new JsonSerializerOptions 
+            { 
+                WriteIndented = true 
+            });
+            Logger.LogInformation("Filter Request Body: {Request}", requestJson);
+
+            var filterResult = await CompareService.FilterCarsAsync(request);
+            
+            // Log the response
+            Logger.LogInformation("Filter Response: {Response}", 
+                JsonSerializer.Serialize(filterResult, new JsonSerializerOptions { WriteIndented = true }));
+            
+            // Update the filtered IDs set
+            filteredCarIds = filterResult.FilteredCarIds.ToHashSet();
+            filterExplanation = filterResult.Explanation;
+
+            if (!filteredCarIds.Any())
+            {
+                error = "Aucune voiture ne correspond à vos critères";
+                Logger.LogWarning("No cars matched the filter criteria");
+                isFilterMode = false;
+                return;
+            }
+
+            // Log the matching cars
+            Logger.LogInformation("Filtered Car IDs: {Ids}", string.Join(", ", filteredCarIds));
+            var matchingCars = articles.Where(a => filteredCarIds.Contains(a.Id)).ToList();
+            Logger.LogInformation("Matching Cars:");
+            foreach (var car in matchingCars)
+            {
+                Logger.LogInformation("- ID: {Id}, Title: {Title}", car.Id, car.Title);
+            }
+            
+            isFilterMode = true;
+            await InvokeAsync(StateHasChanged); // Force UI update
+            LogFilterState();
+            
+            // Scroll to filter results after a short delay to ensure UI has updated
+            await Task.Delay(100);
+            await JS.InvokeVoidAsync("scrollToElement", "filtered-results");
+        }
+        catch (Exception ex)
+        {
+            error = "Error applying AI filter";
+            Logger.LogError(ex, "Error during AI filtering: {Message}", ex.Message);
+            Logger.LogError(ex, "Stack trace: {StackTrace}", ex.StackTrace);
+            isFilterMode = false;
+            filteredCarIds.Clear();
+        }
+        finally
+        {
+            isFiltering = false;
+            await InvokeAsync(StateHasChanged); // Force UI update
+        }
+    }
+
+    // Add a method to log the current filter state
+    private void LogFilterState()
+    {
+        Logger.LogInformation("Current Filter State:");
+        Logger.LogInformation("- AI Filter Mode: {IsActive}", isFilterMode);
+        Logger.LogInformation("- Filtered Car IDs: {Ids}", string.Join(", ", filteredCarIds));
+        Logger.LogInformation("- Total Cars: {Total}", articles.Count);
+        Logger.LogInformation("- Filtered Cars: {Filtered}", FilteredArticles.Count());
+        Logger.LogInformation("- Manual Filters Active: {HasManualFilters}", HasManualFilters());
+        
+        if (isFilterMode)
+        {
+            var matchingIds = articles.Where(a => filteredCarIds.Contains(a.Id))
+                                    .Select(a => a.Id)
+                                    .ToList();
+            Logger.LogInformation("- Matching Car IDs in current list: {Ids}", 
+                string.Join(", ", matchingIds));
+        }
+    }
+
+    // Helper method to check if any manual filters are active
+    private bool HasManualFilters()
+    {
+        return minPrice.HasValue || maxPrice.HasValue || minYear.HasValue || 
+               maxYear.HasValue || maxMileage.HasValue || !string.IsNullOrEmpty(selectedFuelType);
+    }
+}
+
+<script>
+    window.showToast = function (title, message, type = 'info') {
+        // Check if Bootstrap is available
+        if (typeof bootstrap !== 'undefined') {
+            // Create toast container if it doesn't exist
+            let toastContainer = document.getElementById('toast-container');
+            if (!toastContainer) {
+                toastContainer = document.createElement('div');
+                toastContainer.id = 'toast-container';
+                toastContainer.className = 'toast-container position-fixed top-0 end-0 p-3';
+                document.body.appendChild(toastContainer);
+            }
+            
+            // Create toast element
+            const toastId = 'toast-' + Date.now();
+            const toastHtml = `
+                <div id="${toastId}" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+                    <div class="toast-header bg-${type} text-white">
+                        <strong class="me-auto">${title}</strong>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast" aria-label="Close"></button>
+                    </div>
+                    <div class="toast-body">
+                        ${message}
+                    </div>
+                </div>
+            `;
+            
+            // Add toast to container
+            toastContainer.insertAdjacentHTML('beforeend', toastHtml);
+            
+            // Initialize and show toast
+            const toastElement = document.getElementById(toastId);
+            const toast = new bootstrap.Toast(toastElement, { autohide: true, delay: 5000 });
+            toast.show();
+            
+            // Remove toast after it's hidden
+            toastElement.addEventListener('hidden.bs.toast', function () {
+                toastElement.remove();
+            });
+        } else {
+            // Fallback if Bootstrap is not available
+            console.log(`${type.toUpperCase()} - ${title}: ${message}`);
+            alert(`${title}\n${message}`);
+        }
+    }
+</script>

@@ -1,0 +1,22 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.12.35527.113 d17.12
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "csharp-net-blazor-carchat", "csharp-net-blazor-carchat\csharp-net-blazor-carchat.csproj", "{B235C643-8E27-402E-BE88-3C98ED7CDCD3}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{B235C643-8E27-402E-BE88-3C98ED7CDCD3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B235C643-8E27-402E-BE88-3C98ED7CDCD3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B235C643-8E27-402E-BE88-3C98ED7CDCD3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B235C643-8E27-402E-BE88-3C98ED7CDCD3}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

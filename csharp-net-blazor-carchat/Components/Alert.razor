@@ -1,0 +1,24 @@
+@using Microsoft.JSInterop
+@inject IJSRuntime JSRuntime
+
+<div class="alert @($"alert-{Type}") alert-dismissible fade show" role="alert">
+    @Message
+    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+</div>
+
+@code {
+    [Parameter]
+    public string Type { get; set; } = "info";
+
+    [Parameter]
+    public string Message { get; set; } = "";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // Initialize Bootstrap alert
+            await JSRuntime.InvokeVoidAsync("bootstrap.Alert.getOrCreateInstance", ".alert");
+        }
+    }
+} 
